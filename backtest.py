@@ -499,86 +499,129 @@ def analyze_training_data(data, start_idx, window=50):
         'training': training
     }
 
-def score_number(num, analysis, last_round_numbers):
-    """번호별 스코어 계산 (상세표 완전 적용)"""
+def score_number(num, analysis, last_round_numbers, detail=False):
+    """번호별 스코어 계산 (상세표 완전 적용)
+
+    Args:
+        num: 번호 (1-45)
+        analysis: 분석 데이터
+        last_round_numbers: 직전 회차 번호
+        detail: True면 각 요소별 점수 딕셔너리 반환
+
+    Returns:
+        detail=False: 총점 (float)
+        detail=True: {요소별 점수 딕셔너리}
+    """
     window = analysis['window']
+    scores = {}
 
     # 연속출현 제외 체크 (소수가 같은 위치에서 연속 출현 시 완전 제외)
+    excluded = False
     if num in PRIMES:
         for pos in range(6):
             if num in analysis['pos_consecutive_primes'][pos]:
-                return float('-inf')  # 완전 제외
+                excluded = True
+                break
 
-    score = 0
+    if excluded:
+        if detail:
+            return {'excluded': True, 'total': float('-inf')}
+        return float('-inf')
 
     # 1. 빈도 점수 (최대 ~6)
     freq = analysis['num_freq'].get(num, 0)
     freq_score = min(freq / 8, 6)
-    score += freq_score
+    scores['빈도'] = round(freq_score, 1)
 
     # 2. 주기 점수 (최대 10)
     last = analysis['num_last'].get(num, -50)
     gap = window - last - 1
     cycle_score = min(gap / 5, 10)
-    score += cycle_score
+    scores['주기'] = round(cycle_score, 1)
 
     # 3. 최근 감점 (최대 -4)
+    recent_penalty = 0
     if gap <= 2:
-        score -= (3 - gap) * 2
+        recent_penalty = -((3 - gap) * 2)
+    scores['최근'] = round(recent_penalty, 1)
 
-    # 4. 소수 점수 (3점 - 원래 스펙대로)
-    if num in PRIMES:
-        score += 3
+    # 4. 소수 점수 (3점)
+    prime_score = 3 if num in PRIMES else 0
+    scores['소수'] = round(prime_score, 1)
 
-    # 5. 소수위치 점수 (최대 2점) - 해당 소수의 특화 위치 기반
+    # 5. 소수위치 점수 (최대 2점)
+    prime_pos_score = 0
     if num in PRIME_POSITION_MAP:
         preferred_positions = PRIME_POSITION_MAP[num]
         pos_freq = analysis['num_pos_freq'].get(num, [0] * 6)
-        # 특화 위치에서의 출현 빈도 체크
         specialized_freq = sum(pos_freq[p] for p in preferred_positions if p < len(pos_freq))
         if specialized_freq > 0:
-            score += min(specialized_freq / 3, 2)
+            prime_pos_score = min(specialized_freq / 3, 2)
+    scores['소수위치'] = round(prime_pos_score, 1)
 
-    # 6. 콜드 점수 (3점) - 평균 주기(7) 초과 미출현
+    # 6. 콜드 점수 (3점)
     avg_cycle = 7
-    if gap > avg_cycle:
-        score += 3
+    cold_score = 3 if gap > avg_cycle else 0
+    scores['콜드'] = round(cold_score, 1)
 
-    # 7. 위치빈도 점수 (최대 ~3) - 위치별 출현 패턴
+    # 7. 위치빈도 점수 (최대 ~3)
     pos_freq = analysis['num_pos_freq'].get(num, [0] * 6)
     max_pos_freq = max(pos_freq) if pos_freq else 0
     position_score = min(max_pos_freq / 5, 3)
-    score += position_score
+    scores['위치'] = round(position_score, 1)
 
     # 8. 이월 점수 (2점)
-    if num in last_round_numbers:
-        score += 2
+    carryover_score = 2 if num in last_round_numbers else 0
+    scores['이월'] = round(carryover_score, 1)
 
-    # 9. 연속수 점수 (최대 ~2) - 연속수 참여 빈도
+    # 9. 연속수 점수 (최대 ~2)
     consecutive_score = 0
     if num in CONSECUTIVE_FREQ:
         consecutive_score = min(CONSECUTIVE_FREQ[num] / 10, 2)
     for (a, b), cnt in analysis['consecutive_pairs'].items():
         if num == a or num == b:
             consecutive_score = max(consecutive_score, min(cnt / 3, 2))
-    score += consecutive_score
+    scores['연속'] = round(consecutive_score, 1)
 
-    # 10. 끝수 점수 (최대 ~2) - 위치별 끝수 선호도
+    # 10. 끝수 점수 (최대 ~0.5)
     ending = num % 10
     ending_score = 0
     pos_ending_freq = analysis.get('pos_ending_freq', [])
     for pos in range(6):
-        # 학습 데이터 기반 해당 위치에서의 끝수 빈도
         if pos < len(pos_ending_freq):
             learned_freq = pos_ending_freq[pos].get(ending, 0)
-            # 전체 통계 기반 선호도도 고려
             global_pref = ENDING_POSITION_PREF.get(pos, {}).get(ending, 30)
-            # 학습 빈도와 전체 통계 조합 (학습 데이터 비중 높게)
             combined = learned_freq * 0.7 + (global_pref / 10) * 0.3
             ending_score = max(ending_score, min(combined / 5, 0.5))
-    score += ending_score
+    scores['끝수'] = round(ending_score, 2)
 
-    return score
+    # 총점 계산
+    total = sum(scores.values())
+    scores['총점'] = round(total, 1)
+    scores['excluded'] = False
+
+    if detail:
+        return scores
+    return total
+
+def get_full_score_table(analysis, last_round_numbers):
+    """45개 번호 전체 상세 점수표 생성"""
+    all_scores = []
+    for num in range(1, 46):
+        detail = score_number(num, analysis, last_round_numbers, detail=True)
+        detail['번호'] = num
+        detail['P'] = 'P' if num in PRIMES else ''
+        all_scores.append(detail)
+
+    # 총점 기준 내림차순 정렬
+    all_scores.sort(key=lambda x: x.get('총점', float('-inf')), reverse=True)
+
+    # 순위 부여
+    for i, s in enumerate(all_scores):
+        s['순위'] = i + 1
+
+    return all_scores
+
 
 def predict_top_numbers(analysis, last_round_numbers, top_n=10):
     """TOP N 번호 예측 (합계범위 101-160 고려)"""
@@ -615,6 +658,7 @@ def run_backtest():
     data_dict = {r: nums for r, nums in data}
 
     results = []
+    last_full_table = None  # 마지막 회차의 전체 상세표
 
     # 876회차부터 1203회차까지 예측
     for target_round in range(876, 1204):
@@ -655,6 +699,15 @@ def run_backtest():
         predicted_primes = [n for n, _ in top10 if n in PRIMES]
         prime_hits = len(set(actual_primes) & set(predicted_primes))
 
+        # 마지막 회차면 전체 상세표 저장
+        if target_round == 1203:
+            last_full_table = {
+                'round': target_round,
+                'actual': actual,
+                'last_numbers': last_numbers,
+                'table': get_full_score_table(analysis, last_numbers)
+            }
+
         results.append({
             'round': target_round,
             'actual': actual,
@@ -665,9 +718,9 @@ def run_backtest():
             'prime_hits': prime_hits
         })
 
-    return results
+    return results, last_full_table
 
-def generate_report(results):
+def generate_report(results, full_table=None):
     """결과 리포트 생성"""
     total = len(results)
 
@@ -758,20 +811,66 @@ def generate_report(results):
     report += """
 </details>
 
+"""
+
+    # 전체 상세표 추가
+    if full_table:
+        t = full_table
+        actual_set = set(t['actual'])
+
+        # 제외된 번호 목록
+        excluded_nums = [s['번호'] for s in t['table'] if s.get('excluded')]
+
+        report += f"""## {t['round']}회차 전체 상세 점수표
+
+- **실제 당첨번호**: {', '.join(map(str, t['actual']))}
+- **이월 대상 (직전회차)**: {', '.join(map(str, t['last_numbers']))}
+- **연속출현 제외**: {', '.join(map(str, sorted(excluded_nums))) if excluded_nums else '없음'}
+
+| 순위 | 번호 | 빈도 | 주기 | 최근 | 소수 | 소수위치 | 콜드 | 위치 | 이월 | 연속 | 끝수 | 총점 | 당첨 |
+|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
+"""
+        for s in t['table']:
+            num = s['번호']
+            p_mark = s['P']
+            hit_mark = '★' if num in actual_set else ''
+
+            if s.get('excluded'):
+                # 제외된 번호는 별도 표시
+                report += f"| - | {num}{p_mark} | - | - | - | - | - | - | - | - | - | - | 제외 | {hit_mark} |\n"
+            else:
+                report += f"| {s['순위']} | {num}{p_mark} | {s['빈도']} | {s['주기']} | {s['최근']} | {s['소수']} | {s['소수위치']} | {s['콜드']} | {s['위치']} | {s['이월']} | {s['연속']} | {s['끝수']} | {s['총점']} | {hit_mark} |\n"
+
+        # 당첨번호 분포 요약
+        hit_ranks = []
+        excluded_hits = []
+        for s in t['table']:
+            if s['번호'] in actual_set:
+                if s.get('excluded'):
+                    excluded_hits.append(s['번호'])
+                else:
+                    hit_ranks.append(s['순위'])
+        hit_ranks.sort()
+        report += f"\n**당첨번호 순위 분포**: {', '.join(map(str, hit_ranks))}"
+        if excluded_hits:
+            report += f" (제외된 당첨번호: {', '.join(map(str, sorted(excluded_hits)))})"
+        report += "\n"
+
+    report += """
 ## 결론
 
 이 백테스팅은 50회차 데이터를 학습하여 다음 회차 TOP 10 번호를 예측한 결과입니다.
-소수 패턴과 빈도/주기/콜드넘버 등을 종합하여 스코어링했습니다.
+스코어링 요소: 빈도, 주기, 최근감점, 소수, 소수위치, 콜드, 위치빈도, 이월, 연속, 끝수
 """
 
     return report
 
 if __name__ == '__main__':
     print("백테스팅 시작...")
-    results = run_backtest()
+    results, full_table = run_backtest()
     print(f"총 {len(results)}회차 테스트 완료")
 
-    report = generate_report(results)
+    report = generate_report(results, full_table)
 
     with open('docs/backtesting.md', 'w', encoding='utf-8') as f:
         f.write(report)
