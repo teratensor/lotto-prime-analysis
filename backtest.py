@@ -14,6 +14,31 @@ PRIMES = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43}
 # 연속수 다빈도 번호 (참여 빈도 기준)
 CONSECUTIVE_FREQ = {27: 20, 15: 19, 16: 18, 32: 17, 28: 17, 29: 16, 26: 15, 33: 14, 11: 13, 12: 13}
 
+# 위치별 특화 소수 (position-analysis.md 기준)
+PRIME_POSITION_MAP = {
+    # ord1 특화: 2, 3이 압도적
+    2: [0], 3: [0], 5: [0, 1], 7: [0, 1],
+    # ord2 특화: 5, 17, 11, 19
+    11: [1, 2], 13: [2, 3],
+    # ord3~4 특화: 17, 19, 23, 29
+    17: [1, 2, 3], 19: [1, 2, 3], 23: [2, 3, 4], 29: [3, 4],
+    # ord5 특화: 37, 29, 31
+    31: [3, 4, 5], 37: [4, 5],
+    # ord6 특화: 43, 41
+    41: [4, 5], 43: [5]
+}
+
+# 위치별 선호 끝수 (378회 기준 빈도 분석)
+# ord1: 1,2,3,4 / ord2: 5,9,7 / ord3: 1,3,7,9 / ord4: 7,1,8 / ord5: 9,0,3 / ord6: 5,4,2
+ENDING_POSITION_PREF = {
+    0: {1: 67, 2: 59, 3: 55, 4: 54, 5: 35, 6: 33, 7: 24, 8: 23, 9: 14, 0: 14},  # ord1
+    1: {5: 47, 9: 47, 7: 46, 0: 40, 2: 36, 6: 35, 3: 35, 8: 32, 4: 31, 1: 29},  # ord2
+    2: {1: 42, 3: 42, 7: 42, 9: 42, 6: 37, 5: 37, 0: 36, 2: 35, 4: 34, 8: 31},  # ord3
+    3: {7: 48, 1: 42, 8: 42, 9: 38, 5: 38, 3: 37, 2: 36, 0: 33, 6: 32, 4: 32},  # ord4
+    4: {9: 46, 0: 42, 3: 42, 6: 40, 2: 40, 8: 37, 7: 36, 1: 32, 5: 32, 4: 31},  # ord5
+    5: {5: 69, 4: 51, 2: 47, 3: 44, 9: 38, 1: 33, 0: 31, 7: 27, 8: 24, 6: 14},  # ord6
+}
+
 # 데이터 로드
 DATA = """826,14,15,16,19,21,30
 827,3,5,16,29,30,31
@@ -430,11 +455,18 @@ def analyze_training_data(data, start_idx, window=50):
     # 연속수 쌍 출현 횟수
     consecutive_pairs = defaultdict(int)
 
+    # 끝수 분석: 위치별 끝수 출현 빈도
+    pos_ending_freq = [defaultdict(int) for _ in range(6)]  # [{끝수: 빈도}] * 6
+
     for idx, (round_num, numbers) in enumerate(training):
         for pos, num in enumerate(numbers):
             num_freq[num] += 1
             num_last[num] = idx
             num_pos_freq[num][pos] += 1
+
+            # 끝수 빈도 기록
+            ending = num % 10
+            pos_ending_freq[pos][ending] += 1
 
             if num in PRIMES:
                 pos_prime_count[pos] += 1
@@ -462,14 +494,22 @@ def analyze_training_data(data, start_idx, window=50):
         'num_pos_freq': num_pos_freq,
         'prime_count_dist': prime_count_dist,
         'consecutive_pairs': consecutive_pairs,
+        'pos_ending_freq': pos_ending_freq,
         'window': window,
         'training': training
     }
 
 def score_number(num, analysis, last_round_numbers):
-    """번호별 스코어 계산 (상세표 기준 - 가중치 조정)"""
-    score = 0
+    """번호별 스코어 계산 (상세표 완전 적용)"""
     window = analysis['window']
+
+    # 연속출현 제외 체크 (소수가 같은 위치에서 연속 출현 시 완전 제외)
+    if num in PRIMES:
+        for pos in range(6):
+            if num in analysis['pos_consecutive_primes'][pos]:
+                return float('-inf')  # 완전 제외
+
+    score = 0
 
     # 1. 빈도 점수 (최대 ~6)
     freq = analysis['num_freq'].get(num, 0)
@@ -486,25 +526,25 @@ def score_number(num, analysis, last_round_numbers):
     if gap <= 2:
         score -= (3 - gap) * 2
 
-    # 4. 소수 점수 (5점으로 상향) + 연속출현 제외 (-2점으로 완화)
+    # 4. 소수 점수 (3점 - 원래 스펙대로)
     if num in PRIMES:
-        score += 5  # 소수 가중치 상향
-        # 같은 위치에서 연속 출현한 소수는 감점 (완화)
-        for pos in range(6):
-            if num in analysis['pos_consecutive_primes'][pos]:
-                score -= 2  # 연속출현 감점 완화
-                break
+        score += 3
 
-    # 5. 합계 범위 점수 (1점) - 101-160 범위 기여도
-    if 17 <= num <= 27:
-        score += 1
+    # 5. 소수위치 점수 (최대 2점) - 해당 소수의 특화 위치 기반
+    if num in PRIME_POSITION_MAP:
+        preferred_positions = PRIME_POSITION_MAP[num]
+        pos_freq = analysis['num_pos_freq'].get(num, [0] * 6)
+        # 특화 위치에서의 출현 빈도 체크
+        specialized_freq = sum(pos_freq[p] for p in preferred_positions if p < len(pos_freq))
+        if specialized_freq > 0:
+            score += min(specialized_freq / 3, 2)
 
     # 6. 콜드 점수 (3점) - 평균 주기(7) 초과 미출현
     avg_cycle = 7
     if gap > avg_cycle:
         score += 3
 
-    # 7. 위치 점수 (최대 ~3) - 위치별 출현 패턴
+    # 7. 위치빈도 점수 (최대 ~3) - 위치별 출현 패턴
     pos_freq = analysis['num_pos_freq'].get(num, [0] * 6)
     max_pos_freq = max(pos_freq) if pos_freq else 0
     position_score = min(max_pos_freq / 5, 3)
@@ -523,17 +563,51 @@ def score_number(num, analysis, last_round_numbers):
             consecutive_score = max(consecutive_score, min(cnt / 3, 2))
     score += consecutive_score
 
+    # 10. 끝수 점수 (최대 ~2) - 위치별 끝수 선호도
+    ending = num % 10
+    ending_score = 0
+    pos_ending_freq = analysis.get('pos_ending_freq', [])
+    for pos in range(6):
+        # 학습 데이터 기반 해당 위치에서의 끝수 빈도
+        if pos < len(pos_ending_freq):
+            learned_freq = pos_ending_freq[pos].get(ending, 0)
+            # 전체 통계 기반 선호도도 고려
+            global_pref = ENDING_POSITION_PREF.get(pos, {}).get(ending, 30)
+            # 학습 빈도와 전체 통계 조합 (학습 데이터 비중 높게)
+            combined = learned_freq * 0.7 + (global_pref / 10) * 0.3
+            ending_score = max(ending_score, min(combined / 5, 0.5))
+    score += ending_score
+
     return score
 
 def predict_top_numbers(analysis, last_round_numbers, top_n=10):
-    """TOP N 번호 예측"""
+    """TOP N 번호 예측 (합계범위 101-160 고려)"""
     scores = []
     for num in range(1, 46):
         total_score = score_number(num, analysis, last_round_numbers)
         scores.append((num, total_score))
 
-    scores.sort(key=lambda x: -x[1])
-    return scores[:top_n]
+    # 연속출현 제외된 번호(-inf) 필터링
+    valid_scores = [(n, s) for n, s in scores if s > float('-inf')]
+    valid_scores.sort(key=lambda x: -x[1])
+
+    # TOP 후보군에서 합계범위 101-160 적합도 가산
+    top_candidates = valid_scores[:20]
+
+    # 각 번호별 합계 적합도 계산 (평균값 136 기준으로 기여도)
+    enhanced_scores = []
+    for num, base_score in top_candidates:
+        sum_bonus = 0
+        # 합계 136을 만들기 위한 개별 번호 평균값은 약 22.7
+        # 17-27 범위 번호는 합계 범위에 유리
+        if 17 <= num <= 27:
+            sum_bonus = 1.0
+        elif 12 <= num <= 32:
+            sum_bonus = 0.5
+        enhanced_scores.append((num, base_score + sum_bonus))
+
+    enhanced_scores.sort(key=lambda x: -x[1])
+    return enhanced_scores[:top_n]
 
 def run_backtest():
     """백테스팅 실행"""
