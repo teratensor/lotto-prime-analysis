@@ -1,10 +1,24 @@
-# CLAUDE.md
+# 로또 소수 중심 분석 프로젝트
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+로또 당첨번호(ord1-ord6)에서 **소수(Prime Number)** 패턴을 중심으로 분석하고 예측하는 프로젝트.
 
-## Project Overview
+## 핵심 전략
 
-로또 당첨번호(ord1-ord6) 분석 및 예측 프로젝트.
+1. **소수 위치 선정** - 어느 위치(ord1~6)에서 소수가 출현할지 예측
+2. **소수 개수 선택** - 1개, 2개, 3개 중 선택 (2개가 33.1%로 최다)
+3. **연속출현 제외** - 같은 위치에서 2회 연속 출현한 소수는 제외
+
+## 소수 목록
+
+```
+2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43
+```
+
+## 분석 결과 요약
+
+- [소수 개수별 분포](docs/prime-count-distribution.md)
+- [위치별 소수 출현률](docs/position-analysis.md)
+- [1203회차 예측 검증](docs/round-1203-analysis.md)
 
 ## Database
 
